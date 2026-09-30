@@ -15,18 +15,54 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Find and extract project ZIP
+        shell: bash
         run: |
-          ZIP=$(find . -name "PersonalVoiceAssistant_Android_MVP.zip" -print -quit)
+          set -e
 
-          if [ -z "$ZIP" ]; then
-            echo "ERROR: PersonalVoiceAssistant_Android_MVP.zip was not found."
+          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
+
+          if [ -n "$ZIP_FILE" ]; then
+            echo "Found project ZIP: $ZIP_FILE"
+
+            mkdir -p android-project
+            unzip -o "$ZIP_FILE" -d android-project
+
+            echo "Extracted project:"
+            find android-project -maxdepth 3 -type f | head -100
+          else
+            echo "No ZIP file found."
+          fi
+
+      - name: Locate Android project
+        shell: bash
+        run: |
+          set -e
+
+          PROJECT_DIR=""
+
+          if [ -f "settings.gradle" ] || [ -f "settings.gradle.kts" ]; then
+            PROJECT_DIR="."
+          elif [ -f "android-project/settings.gradle" ] || [ -f "android-project/settings.gradle.kts" ]; then
+            PROJECT_DIR="android-project"
+          else
+            FOUND=$(find android-project . -type f \
+              -name "settings.gradle" -o \
+              -name "settings.gradle.kts" \
+            -print -quit 2>/dev/null || true)
+
+            if [ -n "$FOUND" ]; then
+              PROJECT_DIR=$(dirname "$FOUND")
+            fi
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android Gradle project not found."
+            echo "Searching repository:"
+            find . -maxdepth 5 -type f | sort | head -300
             exit 1
           fi
 
-          mkdir -p android-project
-          unzip -q "$ZIP" -d android-project
-
-          PROJECT_DIR=$(find android-project -name "settings.gradle.kts" -print -quit | xargs dirname)
+          echo "Android project found at: $PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Set up Java
@@ -36,24 +72,29 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK
-        run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: android-actions/setup-android@v4
         with:
-          gradle-version: '8.10'
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: platform-tools
 
-      - name: Build APK
+      - name: Install Android SDK packages
+        shell: bash
         run: |
-          cd "$PROJECT_DIR"
-          gradle assembleDebug --no-daemon
+          set -e
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: PersonalVoiceAssistant-APK
-          path: "**/build/outputs/apk/debug/*.apk"
+          if [ -f "$PROJECT_DIR/app/build.gradle" ]; then
+            GRADLE_FILE="$PROJECT_DIR/app/build.gradle"
+          elif [ -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            GRADLE_FILE="$PROJECT_DIR/app/build.gradle.kts"
+          else
+            GRADLE_FILE="$PROJECT_DIR/build.gradle"
+          fi
+
+          echo "Checking Android project:"
+          echo "$GRADLE_FILE"
+
+          SDK_PACKAGES="platform-tools"
+
+          if grep -q "compileSdk" "$GRADLE_FILE"; then
+            COMPILE_SDK=$(grep -oE 'compileSdk(VERSION)?[[:space:]]*[=
